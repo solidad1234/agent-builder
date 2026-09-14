@@ -1,15 +1,94 @@
 # agent_builder/.hermes/plugins/frappe_tools/tools.py
 
 import json
+import re
 import frappe
 import frappe.desk.query_report
+from agent_builder.api import tool_context
+
+
+_SENSITIVE_FIELDS = {
+    "api_key", "password", "new_password", "old_password", "user_password",
+    "reset_password_key", "access_token", "refresh_token", "secret", "client_secret",
+}
+_SENSITIVE_TABLES = {"tabUser", "tab__Auth", "tabOAuth Bearer Token", "tabIntegration Request"}
+_DANGEROUS_SQL = re.compile(
+    r"(?:;|--|/\*|\*/|\b(?:insert|update|delete|drop|alter|truncate|create|replace|grant|revoke|call|execute|outfile|dumpfile|load_file|set|into)\b)",
+    re.IGNORECASE,
+)
+
+
+def _redact(value):
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if key.lower() in _SENSITIVE_FIELDS else _redact(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact(item) for item in value]
+    return value
+
+
+def _confirmation_key():
+    context = tool_context.get_request_context()
+    return f"agent_builder:pending_action:{context.get('user')}:{context.get('chat_id')}"
+
+
+def _require_confirmation(args, operation):
+    """Require a second, exact CONFIRM message for every mutation."""
+    context = tool_context.get_request_context()
+    payload = {"operation": operation, "args": args}
+    pending = frappe.cache().get_value(_confirmation_key())
+    user_message = str(context.get("user_message", "")).strip().upper()
+
+    if user_message == "CONFIRM" and pending == payload:
+        frappe.cache().delete_value(_confirmation_key())
+        return None
+
+    frappe.cache().set_value(_confirmation_key(), payload, expires_in_sec=300)
+    return (
+        "confirmation_required: The requested change is prepared but has not been executed. "
+        "Review the exact target and fields above, then send a separate message containing only "
+        "CONFIRM to authorize this exact operation."
+    )
+
+
+def _validate_sql(query):
+    if "System Manager" not in frappe.get_roles():
+        return "Direct SQL is restricted to System Manager users; use the permission-aware list or report tools."
+
+    query = query.strip()
+    if not query or not re.match(r"^select\b", query, re.IGNORECASE):
+        return "Only a single SELECT statement is allowed."
+    if _DANGEROUS_SQL.search(query) or "#" in query:
+        return "SQL comments, multiple statements, and write or file operations are not allowed."
+    if re.search(r"\bselect\s+\*|,\s*\*|\*\s*,", query, re.IGNORECASE):
+        return "Wildcard projections are not allowed; name the required fields explicitly."
+
+    table_matches = re.findall(
+        r"\b(?:from|join)\s+(?:`([^`]+)`|([A-Za-z0-9_]+))",
+        query,
+        re.IGNORECASE,
+    )
+    table_names = [quoted or bare for quoted, bare in table_matches]
+    if not table_names:
+        return "A query must reference an allowed Frappe DocType table."
+
+    for table_name in table_names:
+        table_name = table_name.strip()
+        if not table_name.startswith("tab") or table_name in _SENSITIVE_TABLES:
+            return f"Table '{table_name}' is not available through the SQL tool."
+        doctype = table_name[3:]
+        if not frappe.db.exists("DocType", doctype) or not frappe.has_permission(doctype, "read"):
+            return f"You do not have read permission for '{doctype}'."
+    return None
 
 def frappe_get_doc(args: dict, **kwargs) -> str:
     try:
         doc = frappe.get_doc(args["doctype"], args["name"])
         doc.check_permission("read")
 
-        return json.dumps(doc.as_dict(), default=str)
+        return json.dumps(_redact(doc.as_dict()), default=str)
 
     except frappe.DoesNotExistError:
         return json.dumps({
@@ -34,7 +113,7 @@ def frappe_get_list(args: dict, **kwargs) -> str:
             limit_page_length=args.get("limit", 20),
         )
 
-        return json.dumps(result, default=str)
+        return json.dumps(_redact(result), default=str)
 
     except frappe.PermissionError:
         return json.dumps({
@@ -92,6 +171,10 @@ def frappe_save_doc(args: dict, **kwargs) -> str:
         doctype = data.get("doctype")
         name = data.get("name")
 
+        confirmation_error = _require_confirmation(args, "save_doc")
+        if confirmation_error:
+            return json.dumps({"error": confirmation_error})
+
         if name and frappe.db.exists(doctype, name):
             # Update existing
             doc = frappe.get_doc(doctype, name)
@@ -139,7 +222,12 @@ def frappe_execute_action(args: dict, **kwargs) -> str:
         if not (doctype and name and action):
             return json.dumps({"error": "doctype, name, and action are required."})
 
+        confirmation_error = _require_confirmation(args, "execute_action")
+        if confirmation_error:
+            return json.dumps({"error": confirmation_error})
+
         doc = frappe.get_doc(doctype, name)
+        doc.check_permission("write")
         
         active_workflow = frappe.get_all("Workflow", filters={"document_type": doctype, "is_active": 1})
         
@@ -298,7 +386,7 @@ def frappe_execute_report(args: dict, **kwargs) -> str:
 
         # Result format is usually {"result": [...], "columns": [...]}
         # We need to serialize this cleanly for the LLM
-        return json.dumps(result, default=str)
+        return json.dumps(_redact(result), default=str)
 
     except frappe.PermissionError:
         return json.dumps({"error": f"No permission to run report '{args.get('report_name')}'"})
@@ -351,12 +439,9 @@ def frappe_get_meta(args: dict, **kwargs) -> str:
 def frappe_run_sql(args: dict, **kwargs) -> str:
     try:
         query = args.get("query", "").strip()
-        if not query:
-            return json.dumps({"error": "query is required"})
-            
-        # Strict safeguard: only allow SELECT queries
-        if not query.lower().startswith("select"):
-            return json.dumps({"error": "Only SELECT queries are allowed."})
+        validation_error = _validate_sql(query)
+        if validation_error:
+            return json.dumps({"error": validation_error})
             
         result = frappe.db.sql(query, as_dict=True)
         
@@ -364,6 +449,6 @@ def frappe_run_sql(args: dict, **kwargs) -> str:
         if isinstance(result, list) and len(result) > 50:
             result = result[:50] + [{"_omitted": f"... [{len(result) - 50} rows omitted] ..."}]
             
-        return json.dumps(result, default=str)
+        return json.dumps(_redact(result), default=str)
     except Exception as e:
         return json.dumps({"error": str(e)})

@@ -243,3 +243,8 @@ app_include_js = [
     "/assets/agent_builder/js/chat_ui.js",
 ]
 app_include_css = ["/assets/agent_builder/css/Chat_Ui.css"]
+
+
+fixtures = [
+    {"doctype": "Fallback Models"},
+]

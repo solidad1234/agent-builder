@@ -19,7 +19,9 @@
   "model_details_col_break",
   "max_output_tokens",
   "supports_vision",
-  "supports_tool_calling"
+  "supports_tool_calling",
+  "section_break_zhen",
+  "fallback_models"
  ],
  "fields": [
   {
@@ -117,13 +119,23 @@
   {
    "fieldname": "column_break_dfuz",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_zhen",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "fallback_models",
+   "fieldtype": "Table",
+   "label": "Fallback Models",
+   "options": "Fallback Models"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-08-11 11:24:10.105138",
+ "modified": "2026-09-14 09:39:56.136406",
  "modified_by": "Administrator",
  "module": "Agent Builder",
  "name": "Agent Setup",

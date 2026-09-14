@@ -3,6 +3,13 @@
 
 frappe.ui.form.on("Agent Setup", {
 	refresh(frm) {
+		const fallback_model_filters = {
+			provider: "openrouter",
+			input_price: 0,
+			output_price: 0,
+			supports_tool_calling: 1
+		};
+
 		frm.set_query("model", function() {
 			let filters = {};
 			if (frm.doc.provider) {
@@ -13,6 +20,10 @@ frappe.ui.form.on("Agent Setup", {
 				filters.output_price = 0;
 			}
 			return { filters: filters };
+		});
+
+		frm.set_query("model", "fallback_models", function() {
+			return { filters: fallback_model_filters };
 		});
 
 		// Add custom button at the top and style it black
@@ -32,6 +43,8 @@ frappe.ui.form.on("Agent Setup", {
 	},
 	provider(frm) {
 		frm.set_value("model", "");
+		frm.clear_table("fallback_models");
+		frm.refresh_field("fallback_models");
 	},
 	free_models_only(frm) {
 		frm.set_value("model", "");
