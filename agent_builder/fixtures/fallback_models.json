@@ -1,0 +1,92 @@
+[
+ {
+  "docstatus": 0,
+  "doctype": "Fallback Models",
+  "model": "openrouter/free",
+  "modified": "2026-09-14 09:58:57.824218",
+  "name": "v23bmvc1l4",
+  "parent": "Agent Setup",
+  "parentfield": "fallback_models",
+  "parenttype": "Agent Setup"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Fallback Models",
+  "model": "dots-studio/dots-3-note-preview:free",
+  "modified": "2026-09-14 09:58:57.870723",
+  "name": "3viru2h6bd",
+  "parent": "Agent Setup",
+  "parentfield": "fallback_models",
+  "parenttype": "Agent Setup"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Fallback Models",
+  "model": "thinkingmachines/inkling:free",
+  "modified": "2026-09-14 09:58:57.871873",
+  "name": "3vich1l4lf",
+  "parent": "Agent Setup",
+  "parentfield": "fallback_models",
+  "parenttype": "Agent Setup"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Fallback Models",
+  "model": "nvidia/nemotron-3-nano-30b-a3b:free",
+  "modified": "2026-09-14 09:58:57.824218",
+  "name": "v23sgtpnuq",
+  "parent": "Agent Setup",
+  "parentfield": "fallback_models",
+  "parenttype": "Agent Setup"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Fallback Models",
+  "model": "nvidia/nemotron-nano-9b-v2:free",
+  "modified": "2026-09-14 09:58:57.824218",
+  "name": "v239u1tfbs",
+  "parent": "Agent Setup",
+  "parentfield": "fallback_models",
+  "parenttype": "Agent Setup"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Fallback Models",
+  "model": "nvidia/nemotron-3-super-120b-a12b:free",
+  "modified": "2026-09-14 09:58:57.824218",
+  "name": "v2356t8kc2",
+  "parent": "Agent Setup",
+  "parentfield": "fallback_models",
+  "parenttype": "Agent Setup"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Fallback Models",
+  "model": "google/gemma-4-31b-it:free",
+  "modified": "2026-09-14 09:58:57.824218",
+  "name": "v235pbjof3",
+  "parent": "Agent Setup",
+  "parentfield": "fallback_models",
+  "parenttype": "Agent Setup"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Fallback Models",
+  "model": "poolside/laguna-xs-2.1:free",
+  "modified": "2026-09-14 09:58:57.824218",
+  "name": "v23aulovin",
+  "parent": "Agent Setup",
+  "parentfield": "fallback_models",
+  "parenttype": "Agent Setup"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Fallback Models",
+  "model": "poolside/laguna-s-2.1:free",
+  "modified": "2026-09-14 09:58:57.824218",
+  "name": "v23vt3gu4i",
+  "parent": "Agent Setup",
+  "parentfield": "fallback_models",
+  "parenttype": "Agent Setup"
+ }
+]

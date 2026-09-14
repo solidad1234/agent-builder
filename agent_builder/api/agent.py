@@ -96,6 +96,7 @@ from run_agent import AIAgent
 @frappe.whitelist()
 def new_chat(title=None, message=None):
     """Create a new Agent Chat and return its name."""
+    ensure_chat_access()
     doc = frappe.get_doc({
         "doctype": "Agent Chat",
         "title": title or (message[:50] if message else "New Chat"),
@@ -252,8 +253,16 @@ def check_chat_access():
 
     except Exception:
         frappe.log_error(title="Chat Access Check Failed", message=frappe.get_traceback())
-        # Fail open — don't hide the chat if Agent Setup can't be read
-        return {"has_access": True}
+        return {"has_access": False}
+
+
+def ensure_chat_access(user=None):
+    """Enforce the configured Agent Setup role at the server boundary."""
+    agent_setup = frappe.get_doc("Agent Setup")
+    allowed_role = agent_setup.get("allowed_role")
+    user = user or frappe.session.user
+    if allowed_role and allowed_role not in frappe.get_roles(user):
+        frappe.throw("You do not have permission to use the AI assistant.", frappe.PermissionError)
 
 
 @frappe.whitelist()
@@ -303,11 +312,45 @@ def parse_json(data, default=None):
     return data or (default if default is not None else [])
 
 
+def get_fallback_models(agent_setup, primary_model):
+    """Return the configured, valid OpenRouter free-model fallback chain."""
+    fallback_models = []
+    seen = {primary_model}
+
+    for row in agent_setup.get("fallback_models") or []:
+        model_name = (row.get("model") or "").strip()
+        if not model_name or model_name in seen:
+            continue
+
+        model = frappe.db.get_value(
+            "AI Model",
+            model_name,
+            ["model", "provider", "input_price", "output_price", "supports_tool_calling"],
+            as_dict=True,
+        )
+        if not model:
+            continue
+
+        if (
+            (model.provider or "").strip().lower() != "openrouter"
+            or (model.input_price or 0) != 0
+            or (model.output_price or 0) != 0
+            or not model.supports_tool_calling
+        ):
+            continue
+
+        fallback_models.append({"provider": "openrouter", "model": model.model})
+        seen.add(model_name)
+
+    return fallback_models
+
+
 # --- 2. The API Endpoint ---
 @frappe.whitelist()
 def chat(message, chat_id=None, attachments=None):
     """Queue a message to be sent to the AI agent."""
     user = frappe.session.user
+    ensure_chat_access(user)
     attachments = parse_json(attachments, [])
 
     if not chat_id:
@@ -334,6 +377,8 @@ def chat(message, chat_id=None, attachments=None):
 # --- 3. The Background Task ---
 def process_agent_chat(message, chat_id, attachments, user):
     """Background job to process the AI agent interaction."""
+
+    ensure_chat_access()
 
     # Re-run setup on every request so provider/model/key changes in Agent Setup
     # are picked up immediately without restarting workers.
@@ -429,9 +474,11 @@ def process_agent_chat(message, chat_id, attachments, user):
             "gemini":      "gemini-2.5-pro",
         }
         model = (agent_setup.model or "").strip() or _provider_defaults.get(provider, "gpt-4o-mini")
+        fallback_models = get_fallback_models(agent_setup, model) if provider == "openrouter" else []
 
         agent = AIAgent(
             model=model,
+            fallback_model=fallback_models or None,
             quiet_mode=False,
             platform="frappe",
             ephemeral_system_prompt=skills_prompt,
@@ -442,10 +489,16 @@ def process_agent_chat(message, chat_id, attachments, user):
             tool_progress_callback=on_tool_status,
         )
 
-        result = agent.run_conversation(
-            user_message=agent_message,
-            conversation_history=agent_context
-        )
+        from agent_builder.api import tool_context
+        tool_context.set_request_context(user=user, chat_id=chat_id, user_message=message)
+
+        try:
+            result = agent.run_conversation(
+                user_message=agent_message,
+                conversation_history=agent_context
+            )
+        finally:
+            tool_context.clear_request_context()
 
         if result.get("failed"):
             raise Exception(result.get("error") or result.get("final_response") or "Unknown Agent error")
@@ -496,13 +549,18 @@ def sync_models():
 
     synced_count = 0
 
+    # Get all manually created providers and map their lowercase versions to their actual names
+    all_providers = frappe.get_all("AI Provider", pluck="name")
+    valid_providers_map = {p.lower(): p for p in all_providers}
+
     # 1. OpenRouter Models -> all assigned to 'openrouter' provider
     try:
         response = requests.get("https://openrouter.ai/api/v1/models", timeout=15)
         response.raise_for_status()
         data = response.json().get("data", [])
         
-        if frappe.db.exists("AI Provider", "openrouter"):
+        if "openrouter" in valid_providers_map:
+            actual_openrouter_name = valid_providers_map["openrouter"]
             for model in data:
                 model_id = model.get("id")
                 if not model_id: continue
@@ -514,7 +572,7 @@ def sync_models():
                     "doctype": "AI Model",
                     "model": model_id,
                     "model_name": model.get("name"),
-                    "provider": "openrouter",
+                    "provider": actual_openrouter_name,
                     "context_window": model.get("context_length"),
                     "max_output_tokens": model.get("top_provider", {}).get("max_completion_tokens") or 0,
                     "input_price": float(pricing.get("prompt", 0) or 0) * 1000000,
@@ -540,9 +598,6 @@ def sync_models():
         response.raise_for_status()
         litellm_data = response.json()
         
-        # Get all manually created providers
-        valid_providers = set(frappe.get_all("AI Provider", pluck="name"))
-        
         for model_id, details in litellm_data.items():
             if not isinstance(details, dict):
                 continue
@@ -564,12 +619,13 @@ def sync_models():
             if provider_name == "openrouter":
                 continue # Already handled
                 
-            if provider_name in valid_providers:
+            if provider_name in valid_providers_map:
+                actual_provider_name = valid_providers_map[provider_name]
                 model_data = {
                     "doctype": "AI Model",
                     "model": model_id,
                     "model_name": model_id,
-                    "provider": provider_name,
+                    "provider": actual_provider_name,
                     "context_window": details.get("max_tokens") or details.get("max_input_tokens") or 0,
                     "max_output_tokens": details.get("max_output_tokens") or 0,
                     "input_price": float(details.get("input_cost_per_token", 0) or 0) * 1000000,
