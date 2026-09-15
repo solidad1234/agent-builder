@@ -25,6 +25,8 @@ window.ChatRealtime = (function () {
             } else if (data.type === 'tool_done') {
                 _cbs.onStatusChange && _cbs.onStatusChange('Thinking…', true);
                 _cbs.onToolDone     && _cbs.onToolDone(data);
+            } else if (data.type === 'model_status') {
+                _cbs.onStatusChange && _cbs.onStatusChange(data.message || 'Trying a different model...', true);
             }
         });
 

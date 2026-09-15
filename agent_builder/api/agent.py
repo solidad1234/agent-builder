@@ -312,6 +312,32 @@ def parse_json(data, default=None):
     return data or (default if default is not None else [])
 
 
+def get_user_greeting(user):
+    """Return a time-based greeting for the authenticated user's first turn."""
+    first_name = frappe.db.get_value("User", user, "first_name") or "there"
+    first_name = " ".join(str(first_name).split())
+    hour = now_datetime().hour
+
+    if hour < 12:
+        greeting = "Good morning"
+    elif hour < 17:
+        greeting = "Good afternoon"
+    else:
+        greeting = "Good evening"
+
+    return f"{greeting}, {first_name}. I am your ERP assistant. How can I help you today?"
+
+
+def is_simple_greeting(message):
+    """Return whether the user's message is only a casual greeting."""
+    greeting_pattern = (
+        r"(?:hi|hello|hey|howdy|greetings|salutations|yo|"
+        r"(?:good\s+)?(?:morning|afternoon|evening|day))"
+        r"[!.?,;:]?\s*(?:there|everyone)?[!.?,;: ]*"
+    )
+    return bool(re.fullmatch(greeting_pattern, str(message or "").strip(), re.IGNORECASE))
+
+
 def get_fallback_models(agent_setup, primary_model):
     """Return the configured, valid OpenRouter free-model fallback chain."""
     fallback_models = []
@@ -387,6 +413,8 @@ def process_agent_chat(message, chat_id, attachments, user):
     chat_doc = frappe.get_doc("Agent Chat", chat_id)
     room = get_user_room(user)
     agent_context = parse_json(chat_doc.agent_context, None)
+    is_first_turn = not agent_context
+    user_first_name = frappe.db.get_value("User", user, "first_name") or ""
 
     agent_message = message
     if attachments:
@@ -439,6 +467,40 @@ def process_agent_chat(message, chat_id, attachments, user):
             payload["preview"] = preview
         publish("agent_event", payload)
 
+    model_attempts = []
+
+    def on_model_status(kind, status_message):
+        """Record fallback transitions while exposing only a neutral UI status."""
+        message = str(status_message or "")
+        lowered = message.lower()
+        switching = any(
+            phrase in lowered
+            for phrase in ("trying fallback", "switching to fallback", "trying a different model")
+        )
+        if not switching:
+            return
+
+        for attempt in reversed(model_attempts):
+            if attempt.get("status") == "pending":
+                attempt["status"] = "failed"
+                rate_limited = "rate" in lowered or "429" in lowered
+                attempt["reason"] = "rate_limit" if rate_limited else "provider_error"
+                if "429" in lowered:
+                    attempt["http_status"] = 429
+                break
+
+        next_index = len(model_attempts) - 1
+        if next_index < len(fallback_models):
+            model_attempts.append({
+                "model": fallback_models[next_index]["model"],
+                "status": "pending",
+            })
+
+        publish("agent_event", {
+            "type": "model_status",
+            "message": "Trying a different model...",
+        })
+
     def save_chat_message(role, content, extra_fields=None):
         # Guard: content is mandatory in the doctype — use a fallback for
         # tool-only turns where the LLM returns no text.
@@ -464,6 +526,18 @@ def process_agent_chat(message, chat_id, attachments, user):
             {"attachments": json.dumps(attachments)} if attachments else None
         )
         skills_prompt = build_skills_system_prompt(agent_name=agent_name)
+        if user_first_name:
+            skills_prompt += (
+                "\n\n<current_user>\n"
+                f"The authenticated user's first name is {user_first_name}. "
+                "Use it naturally when appropriate, but do not repeatedly greet the user.\n"
+                "</current_user>"
+            )
+        if is_first_turn:
+            skills_prompt += (
+                "\n\nThe application will add the time-based greeting to your first response. "
+                "Do not add a separate greeting yourself."
+            )
 
         provider = (agent_setup.provider or "openrouter").strip().lower()
         _provider_defaults = {
@@ -475,6 +549,7 @@ def process_agent_chat(message, chat_id, attachments, user):
         }
         model = (agent_setup.model or "").strip() or _provider_defaults.get(provider, "gpt-4o-mini")
         fallback_models = get_fallback_models(agent_setup, model) if provider == "openrouter" else []
+        model_attempts.append({"model": model, "status": "pending"})
 
         agent = AIAgent(
             model=model,
@@ -487,6 +562,7 @@ def process_agent_chat(message, chat_id, attachments, user):
             tool_start_callback=on_tool_start,
             tool_complete_callback=on_tool_done,
             tool_progress_callback=on_tool_status,
+            status_callback=on_model_status,
         )
 
         from agent_builder.api import tool_context
@@ -501,13 +577,41 @@ def process_agent_chat(message, chat_id, attachments, user):
             tool_context.clear_request_context()
 
         if result.get("failed"):
+            for attempt in reversed(model_attempts):
+                if attempt.get("status") == "pending":
+                    attempt["status"] = "failed"
+                    attempt["reason"] = "provider_error"
+                    break
             raise Exception(result.get("error") or result.get("final_response") or "Unknown Agent error")
 
         final_response = result.get("final_response") or ""
+        if is_first_turn:
+            greeting = get_user_greeting(user)
+            if is_simple_greeting(message):
+                final_response = greeting
+            else:
+                final_response = f"{greeting}\n\n{final_response}".strip()
+        successful_model = getattr(agent, "model", model)
+        for attempt in model_attempts:
+            if attempt.get("model") == successful_model:
+                attempt["status"] = "success"
+                break
+        else:
+            model_attempts.append({"model": successful_model, "status": "success"})
+
+        model_attempts_json = json.dumps({
+            "primary_model": model,
+            "successful_model": successful_model,
+            "fallback_used": successful_model != model,
+            "attempts": model_attempts,
+        })
 
         save_chat_message(
             "assistant", final_response,
-            {"tool_calls": json.dumps(tool_call_log)} if tool_call_log else None
+            {
+                **({"tool_calls": json.dumps(tool_call_log)} if tool_call_log else {}),
+                "model_attempts": model_attempts_json,
+            }
         )
 
         frappe.db.set_value("Agent Chat", chat_id, {
@@ -532,6 +636,13 @@ def process_agent_chat(message, chat_id, attachments, user):
             error_extras = {"is_error": 1}
             if tool_call_log:
                 error_extras["tool_calls"] = json.dumps(tool_call_log)
+            if model_attempts:
+                error_extras["model_attempts"] = json.dumps({
+                    "primary_model": model_attempts[0].get("model"),
+                    "successful_model": None,
+                    "fallback_used": len(model_attempts) > 1,
+                    "attempts": model_attempts,
+                })
             save_chat_message("assistant", error_text, error_extras)
             frappe.db.commit()
         except Exception:
