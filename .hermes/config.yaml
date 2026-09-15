@@ -1,5 +1,5 @@
 model:
-  default: google/gemma-4-31b-it:free
+  default: cohere/north-mini-code:free
   provider: openrouter
 plugins:
   disabled: []

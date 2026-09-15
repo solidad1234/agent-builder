@@ -11,7 +11,9 @@ frappe.ui.form.on("Agent Setup", {
 		};
 
 		frm.set_query("model", function() {
-			let filters = {};
+			let filters = {
+				supports_tool_calling: 1
+			};
 			if (frm.doc.provider) {
 				filters.provider = frm.doc.provider;
 			}

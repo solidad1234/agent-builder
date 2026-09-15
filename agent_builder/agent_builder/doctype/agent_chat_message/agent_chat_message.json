@@ -11,7 +11,8 @@
   "chat",
   "role",
   "content",
-  "timestamp"
+  "timestamp",
+  "model_attempts"
  ],
  "fields": [
   {
@@ -43,6 +44,12 @@
    "in_list_view": 1,
    "label": "Timestamp",
    "reqd": 1
+  },
+  {
+   "fieldname": "model_attempts",
+   "fieldtype": "Long Text",
+   "label": "Model Attempts",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
