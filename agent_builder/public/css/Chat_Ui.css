@@ -881,3 +881,159 @@ body.ab-artifact-fullscreen-active { overflow: hidden; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 @keyframes typing-dot { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); background: var(--text-color); } }
 .hidden { display: none !important; }
+
+/* ── Interactive Confirmation Card ───────────────────────────── */
+.ab-confirm-card {
+    margin: 12px 0 6px 0;
+    padding: 14px 16px;
+    background: color-mix(in srgb, var(--primary) 5%, var(--bg-color, #ffffff));
+    border: 1.5px solid color-mix(in srgb, var(--primary) 28%, transparent);
+    border-radius: 12px;
+    box-shadow: var(--ab-shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: all 0.2s ease;
+}
+
+.ab-confirm-card:hover {
+    border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+    box-shadow: var(--ab-shadow-md);
+}
+
+.ab-confirm-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 13.5px;
+    color: var(--primary);
+}
+
+.ab-confirm-icon {
+    display: flex;
+    align-items: center;
+    color: var(--primary);
+}
+
+.ab-confirm-explanation {
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text-color);
+}
+
+.ab-confirm-explanation p {
+    margin: 0 0 6px 0;
+}
+.ab-confirm-explanation p:last-child {
+    margin-bottom: 0;
+}
+
+.ab-confirm-changes-table {
+    overflow-x: auto;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-color);
+}
+
+.ab-confirm-changes-table table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.ab-confirm-changes-table th {
+    background: var(--control-bg, #f4f5f7);
+    padding: 6px 10px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.ab-confirm-changes-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-color);
+}
+
+.ab-confirm-changes-table tr:last-child td {
+    border-bottom: none;
+}
+
+.ab-confirm-old {
+    color: #e5484d;
+    text-decoration: line-through;
+}
+
+.ab-confirm-new {
+    color: #30a46c;
+    font-weight: 600;
+}
+
+.ab-confirm-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    margin-top: 6px;
+    width: 100%;
+}
+
+.ab-confirm-action-btn {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 9px 14px;
+    font-size: 12.5px;
+    font-weight: 500;
+    border-radius: 8px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.15s ease;
+    width: 100%;
+    box-sizing: border-box;
+    text-align: left;
+    white-space: normal;
+    word-break: break-word;
+}
+
+.ab-confirm-btn-primary {
+    background: var(--primary);
+    color: #ffffff;
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.ab-confirm-btn-primary:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px color-mix(in srgb, var(--primary) 45%, transparent);
+    filter: brightness(1.05);
+}
+
+.ab-confirm-btn-secondary {
+    background: var(--bg-color);
+    border-color: var(--border-color);
+    color: var(--text-color);
+}
+
+.ab-confirm-btn-secondary:hover:not(:disabled) {
+    background: var(--control-bg);
+    border-color: color-mix(in srgb, var(--text-muted) 40%, transparent);
+}
+
+.ab-confirm-action-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+.ab-confirm-card.ab-confirm-resolved .ab-confirm-action-btn:not(.ab-selected) {
+    opacity: 0.35;
+}
+
+.ab-confirm-card.ab-confirm-resolved .ab-confirm-action-btn.ab-selected {
+    opacity: 1;
+    outline: 2px solid var(--primary);
+}

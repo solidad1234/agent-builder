@@ -1,5 +1,5 @@
 model:
-  default: cohere/north-mini-code:free
+  default: dots-studio/dots-3-note-preview:free
   provider: openrouter
 plugins:
   disabled: []

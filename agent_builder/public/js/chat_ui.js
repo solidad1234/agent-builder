@@ -908,6 +908,23 @@ $(document).ready(function () {
     }
     $(document).on('click', '.ab-resend-btn', retryLastMessage);
 
+    $(document).on('click', '.ab-confirm-action-btn', function () {
+        if (isThinking) return;
+        const $btn = $(this);
+        const $card = $btn.closest('.ab-confirm-card');
+
+        if ($btn.prop('disabled') || $card.hasClass('ab-confirm-resolved')) return;
+
+        const actionText = String($btn.attr('data-text') || ($btn.attr('data-action') === 'confirm' ? 'CONFIRM' : 'CANCEL')).trim();
+
+        $card.addClass('ab-confirm-resolved');
+        $card.find('.ab-confirm-action-btn').prop('disabled', true);
+        $btn.addClass('ab-selected');
+
+        $('#ab-input').val(actionText);
+        sendMessage();
+    });
+
     $(document).on('click', '#ab-send', sendMessage);
     $(document).on('keydown', '#ab-input', (e) => {
         if ($('#ab-slash-menu').hasClass('open')) {
