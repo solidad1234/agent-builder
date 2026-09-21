@@ -331,7 +331,7 @@ def parse_json(data, default=None):
     return data or (default if default is not None else [])
 
 
-def get_user_greeting(user):
+def get_user_greeting(user, brief=False):
     """Return a time-based greeting for the authenticated user's first turn."""
     first_name = frappe.db.get_value("User", user, "first_name") or "there"
     first_name = " ".join(str(first_name).split())
@@ -343,6 +343,9 @@ def get_user_greeting(user):
         greeting = "Good afternoon"
     else:
         greeting = "Good evening"
+
+    if brief:
+        return f"{greeting}, {first_name}."
 
     return f"{greeting}, {first_name}. I am your ERP assistant. How can I help you today?"
 
@@ -616,11 +619,11 @@ def process_agent_chat(message, chat_id, attachments, user):
 
         final_response = result.get("final_response") or ""
         if is_first_turn:
-            greeting = get_user_greeting(user)
             if is_simple_greeting(message):
-                final_response = greeting
+                final_response = get_user_greeting(user, brief=False)
             else:
-                final_response = f"{greeting}\n\n{final_response}".strip()
+                brief_greeting = get_user_greeting(user, brief=True)
+                final_response = f"{brief_greeting}\n\n{final_response}".strip()
         successful_model = getattr(agent, "model", model)
         for attempt in model_attempts:
             if attempt.get("model") == successful_model:
