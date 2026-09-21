@@ -202,6 +202,25 @@ def build_skills_system_prompt(agent_name="Omnis") -> str:
     lines.append("   - You MUST output the chart configuration in a ```chart_json block.")
     lines.append("   - The JSON should follow Frappe Charts structure (e.g. {\"data\": {\"labels\": [...], \"datasets\": [{\"values\": [...]}]}, \"type\": \"bar\"}).")
     lines.append("")
+    lines.append("5. ACTION CONFIRMATION & OPTIONS: Whenever an operation requires user authorization, clarification, or confirmation before writing/updating changes:")
+    lines.append("   - Clearly explain what record and fields will be changed or what choices exist.")
+    lines.append("   - You MUST output a ```confirm_json block at the end of your message with this JSON structure:")
+    lines.append("     ```confirm_json")
+    lines.append("     {")
+    lines.append("       \"title\": \"Authorization Required\",")
+    lines.append("       \"explanation\": \"Short summary of proposed change\",")
+    lines.append("       \"changes\": [{\"field\": \"Field Name\", \"from\": \"Old Value\", \"to\": \"New Value\"}],")
+    lines.append("       \"actions\": [")
+    lines.append("         {\"label\": \"Option 1\", \"value\": \"Change full_name to Jane Smith\"},")
+    lines.append("         {\"label\": \"Option 2\", \"value\": \"Change full_name to Smith\"},")
+    lines.append("         {\"label\": \"Cancel\", \"value\": \"CANCEL\", \"action\": \"cancel\"}")
+    lines.append("       ]")
+    lines.append("     }")
+    lines.append("     ```")
+    lines.append("   - For standard yes/no confirmations, you may use \"confirm_text\": \"CONFIRM\", \"cancel_text\": \"CANCEL\" instead of an actions array.")
+    lines.append("   - ONLY perform the action after explicit user confirmation or selection.")
+    lines.append("   - CRITICAL: When the user responds with 'CONFIRM' or selects a confirmation button/option, the operation IS AUTHORIZED. You MUST execute the tool call (e.g. frappe_save_doc, frappe_rename_doc) IMMEDIATELY in that turn. DO NOT ask for confirmation a second time or output another confirmation request.")
+    lines.append("")
     lines.append("</operation_guardrails>")
     lines.append("")
 
@@ -331,7 +350,7 @@ def get_user_greeting(user):
 def is_simple_greeting(message):
     """Return whether the user's message is only a casual greeting."""
     greeting_pattern = (
-        r"(?:hi|hello|hey|howdy|greetings|salutations|yo|"
+        r"(?:hi|hello|hey|howdy|greetings|salutations|yo|rada|hyy|sup|hiya|heya|hiyaa|hallo|bonjour|hola|ciao|shalom|namaste|salaam|sawasdee|ahoj|hej|hallochen|guten\s+tag"
         r"(?:good\s+)?(?:morning|afternoon|evening|day))"
         r"[!.?,;:]?\s*(?:there|everyone)?[!.?,;: ]*"
     )
@@ -526,6 +545,17 @@ def process_agent_chat(message, chat_id, attachments, user):
             {"attachments": json.dumps(attachments)} if attachments else None
         )
         skills_prompt = build_skills_system_prompt(agent_name=agent_name)
+
+        msg_upper = str(message or "").strip().upper()
+        if msg_upper == "CONFIRM" or msg_upper.startswith("CONFIRM") or "SET VALUE TO" in msg_upper or "OPTION" in msg_upper or "CHANGE " in msg_upper:
+            skills_prompt += (
+                "\n\n<user_authorization_status>\n"
+                "USER AUTHORIZATION GRANTED: The user has explicitly authorized and confirmed the requested database operation. "
+                "DO NOT ask for confirmation again. DO NOT output any confirm_json blocks or ask the user to type or send CONFIRM. "
+                "You MUST execute the database tool calls (e.g. frappe_save_doc, frappe_rename_doc) IMMEDIATELY in this turn to write the changes, then confirm completion to the user."
+                "\n</user_authorization_status>"
+            )
+
         if user_first_name:
             skills_prompt += (
                 "\n\n<current_user>\n"

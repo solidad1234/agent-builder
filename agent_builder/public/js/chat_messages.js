@@ -448,20 +448,156 @@ window.ChatMessages = (function () {
 
     function _renderContentWithArtifacts(text) {
         if (!text) return '';
-        const blockRegex = /```(html|chart_json)\s*\n([\s\S]*?)```/g;
+        const blockRegex = /```(html|chart_json|confirm_json)\s*\n([\s\S]*?)```/g;
         let lastIndex = 0, match, parts = [];
+        let hasConfirmBlock = false;
+
         while ((match = blockRegex.exec(text)) !== null) {
             if (match.index > lastIndex) parts.push({ type: 'md', content: text.slice(lastIndex, match.index) });
+            if (match[1] === 'confirm_json') hasConfirmBlock = true;
             parts.push({ type: match[1], id: _nextId(), content: match[2].trim() });
             lastIndex = match.index + match[0].length;
         }
         if (lastIndex < text.length) parts.push({ type: 'md', content: text.slice(lastIndex) });
-        if (!parts.length || (parts.length === 1 && parts[0].type === 'md')) return _md(text);
-        return parts.map(p => {
+
+        let rendered = parts.map(p => {
             if (p.type === 'md') return _md(p.content);
             if (p.type === 'html') return _createArtifactHTML(p.id, p.content);
             if (p.type === 'chart_json') return _createChartHTML(p.id, p.content);
+            if (p.type === 'confirm_json') return _createConfirmHTML(p.id, p.content);
         }).join('');
+
+        // Fallback Auto-Detection: If no confirm_json code block was included by the model, but text requests confirmation or choices
+        if (!hasConfirmBlock) {
+            const autoDetected = _autoDetectConfirmation(text);
+            if (autoDetected) {
+                rendered += _createConfirmHTML(_nextId(), autoDetected);
+            }
+        }
+
+        return rendered;
+    }
+
+    function _autoDetectConfirmation(text) {
+        if (!text) return null;
+        const lower = text.toLowerCase();
+
+        const isConfirmTrigger = lower.includes('please confirm') ||
+                                 lower.includes('requires confirmation') ||
+                                 lower.includes('send confirm') ||
+                                 lower.includes('send "confirm"') ||
+                                 lower.includes('send \'confirm\'') ||
+                                 lower.includes('need your explicit confirmation') ||
+                                 lower.includes('respond with confirm') ||
+                                 lower.includes('confirm authorization') ||
+                                 (lower.includes('confirm') && (lower.includes('record:') || lower.includes('change:') || lower.includes('field'))) ||
+                                 (lower.includes('would you like to') && (lower.includes('or to') || lower.includes('or')));
+
+        if (!isConfirmTrigger) return null;
+
+        let options = [];
+        // Try to parse options if quoted values exist (e.g., "Jane Smith" or "Smith")
+        const quotedMatches = text.match(/"([^"]+)"/g);
+        if (quotedMatches && quotedMatches.length >= 2) {
+            const candidates = Array.from(new Set(quotedMatches.map(m => m.replace(/"/g, '').trim())))
+                .filter(val => val.length > 0 && val.length < 50 && !val.toLowerCase().includes('student') && !val.toLowerCase().includes('doctype') && !val.toLowerCase().includes('full_name'));
+
+            if (candidates.length >= 2) {
+                candidates.forEach((opt, i) => {
+                    options.push({ label: `Option ${i + 1}: "${opt}"`, value: `Set value to ${opt}` });
+                });
+            }
+        }
+
+        if (options.length > 0) {
+            options.push({ label: 'Cancel', value: 'CANCEL', action: 'cancel' });
+            return {
+                title: 'Action Options & Confirmation',
+                explanation: 'Select how you would like to proceed:',
+                actions: options
+            };
+        }
+
+        return {
+            title: 'Authorization Required',
+            explanation: 'Please confirm whether you want to authorize this change:',
+            confirm_text: 'CONFIRM',
+            cancel_text: 'CANCEL'
+        };
+    }
+
+    function _createConfirmHTML(id, jsonContent) {
+        let data = {};
+        if (typeof jsonContent === 'object' && jsonContent !== null) {
+            data = jsonContent;
+        } else {
+            try {
+                data = JSON.parse(jsonContent);
+            } catch (e) {
+                data = { explanation: String(jsonContent) };
+            }
+        }
+
+        const title = _escapeHtml(data.title || 'Authorization Required');
+        const explanation = data.explanation ? _md(data.explanation) : '';
+
+        let changesHtml = '';
+        if (Array.isArray(data.changes) && data.changes.length) {
+            changesHtml = `<div class="ab-confirm-changes-table">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Current Value</th><th>New Value</th></tr>
+                    </thead>
+                    <tbody>
+                        ${data.changes.map(c => `
+                            <tr>
+                                <td><strong>${_escapeHtml(c.field || '')}</strong></td>
+                                <td class="ab-confirm-old">${_escapeHtml(c.from || '—')}</td>
+                                <td class="ab-confirm-new">${_escapeHtml(c.to || '—')}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>`;
+        }
+
+        let buttonsHtml = '';
+        if (Array.isArray(data.actions) && data.actions.length) {
+            buttonsHtml = data.actions.map((act, idx) => {
+                const isCancel = (act.action === 'cancel' || String(act.value).toUpperCase() === 'CANCEL' || String(act.label).toUpperCase() === 'CANCEL');
+                const btnClass = isCancel ? 'ab-confirm-btn-secondary' : (idx === 0 ? 'ab-confirm-btn-primary' : 'ab-confirm-btn-secondary');
+                return `<button type="button" class="ab-confirm-action-btn ${btnClass}" data-action="${_escapeHtml(act.action || 'option')}" data-text="${_escapeHtml(act.value || act.label || '')}">
+                    ${_escapeHtml(act.label || act.value || '')}
+                </button>`;
+            }).join('');
+        } else {
+            const confirmText = _escapeHtml(data.confirm_text || 'CONFIRM');
+            const cancelText = _escapeHtml(data.cancel_text || 'CANCEL');
+            buttonsHtml = `
+                <button type="button" class="ab-confirm-action-btn ab-confirm-btn-primary" data-action="confirm" data-text="${confirmText}">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                    ${confirmText}
+                </button>
+                <button type="button" class="ab-confirm-action-btn ab-confirm-btn-secondary" data-action="cancel" data-text="${cancelText}">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    ${cancelText}
+                </button>`;
+        }
+
+        const alertShieldIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`;
+
+        return `
+            <div class="ab-confirm-card" data-confirm-id="${id}">
+                <div class="ab-confirm-header">
+                    <span class="ab-confirm-icon">${alertShieldIcon}</span>
+                    <span class="ab-confirm-title">${title}</span>
+                </div>
+                ${explanation ? `<div class="ab-confirm-explanation">${explanation}</div>` : ''}
+                ${changesHtml}
+                <div class="ab-confirm-actions">
+                    ${buttonsHtml}
+                </div>
+            </div>`;
     }
 
     function _createChartHTML(id, jsonContent) {
