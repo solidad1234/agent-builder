@@ -393,6 +393,39 @@ def get_fallback_models(agent_setup, primary_model):
     return fallback_models
 
 
+def get_dynamic_fallback_models(provider, excluded_models, limit=10):
+    """
+    Tier-2 fallback: query the local AI Model table for free, tool-calling models
+    that haven't been tried yet (excluded_models is the set of already-tried model IDs).
+    Sorted by context_window DESC so larger / stronger models are preferred.
+    Only applies to OpenRouter since free-tier variants are OpenRouter-specific.
+    """
+    if provider != "openrouter":
+        return []
+
+    # Match the exact name stored in AI Provider (case may vary: 'openrouter' / 'OpenRouter')
+    provider_doc = frappe.db.get_value(
+        "AI Provider", {"name": ("like", "%openrouter%")}, "name"
+    )
+    if not provider_doc:
+        return []
+
+    models = frappe.get_all(
+        "AI Model",
+        filters={
+            "provider": provider_doc,
+            "input_price": 0,
+            "output_price": 0,
+            "supports_tool_calling": 1,
+            "model": ("not in", list(excluded_models)),
+        },
+        fields=["model", "context_window"],
+        order_by="context_window desc",
+        limit=limit,
+    )
+    return [{"provider": "openrouter", "model": m.model} for m in models]
+
+
 # --- 2. The API Endpoint ---
 @frappe.whitelist()
 def chat(message, chat_id=None, attachments=None):
@@ -610,12 +643,64 @@ def process_agent_chat(message, chat_id, attachments, user):
             tool_context.clear_request_context()
 
         if result.get("failed"):
-            for attempt in reversed(model_attempts):
-                if attempt.get("status") == "pending":
-                    attempt["status"] = "failed"
-                    attempt["reason"] = "provider_error"
-                    break
-            raise Exception(result.get("error") or result.get("final_response") or "Unknown Agent error")
+            # --- Tier-2: dynamic fallback from local AI Model table ---
+            # When the entire Tier-1 admin-configured chain is exhausted, query the
+            # AI Model table for any remaining free tool-calling models that haven't
+            # been tried yet, then retry the conversation with that fresh chain.
+            tried_models = {a["model"] for a in model_attempts}
+            tier2_fallbacks = (
+                get_dynamic_fallback_models(provider, tried_models)
+                if provider == "openrouter"
+                else []
+            )
+
+            if tier2_fallbacks:
+                publish("agent_event", {
+                    "type": "model_status",
+                    "message": "Trying additional free models...",
+                })
+
+                tier2_primary = tier2_fallbacks[0]["model"]
+                model_attempts.append({
+                    "model": tier2_primary,
+                    "status": "pending",
+                    "tier": 2,
+                })
+
+                agent2 = AIAgent(
+                    model=tier2_primary,
+                    fallback_model=tier2_fallbacks[1:] or None,
+                    quiet_mode=False,
+                    platform="frappe",
+                    ephemeral_system_prompt=skills_prompt,
+                    enabled_toolsets=["frappe_tools", "skills"],
+                    stream_delta_callback=on_token,
+                    tool_start_callback=on_tool_start,
+                    tool_complete_callback=on_tool_done,
+                    tool_progress_callback=on_tool_status,
+                    status_callback=on_model_status,
+                )
+
+                from agent_builder.api import tool_context as _tc2
+                _tc2.set_request_context(user=user, chat_id=chat_id, user_message=message)
+                try:
+                    result = agent2.run_conversation(
+                        user_message=agent_message,
+                        conversation_history=agent_context
+                    )
+                finally:
+                    _tc2.clear_request_context()
+
+            # If still failed after Tier-2 (or Tier-2 was empty), mark and raise
+            if result.get("failed"):
+                for attempt in reversed(model_attempts):
+                    if attempt.get("status") == "pending":
+                        attempt["status"] = "failed"
+                        attempt["reason"] = "provider_error"
+                        break
+                raise Exception(
+                    result.get("error") or result.get("final_response") or "Unknown Agent error"
+                )
 
         final_response = result.get("final_response") or ""
         if is_first_turn:
@@ -624,7 +709,8 @@ def process_agent_chat(message, chat_id, attachments, user):
             else:
                 brief_greeting = get_user_greeting(user, brief=True)
                 final_response = f"{brief_greeting}\n\n{final_response}".strip()
-        successful_model = getattr(agent, "model", model)
+        # If Tier-2 was activated, agent2 may be the one that actually succeeded
+        successful_model = getattr(locals().get("agent2") or agent, "model", model)
         for attempt in model_attempts:
             if attempt.get("model") == successful_model:
                 attempt["status"] = "success"
@@ -663,7 +749,16 @@ def process_agent_chat(message, chat_id, attachments, user):
             if entry.get("status") == "running":
                 entry["status"] = "interrupted"
 
-        error_text = "Sorry, something went wrong while processing that request. Please try again."
+        # Give a more specific message when the root cause is free-model exhaustion
+        _last_error = str(e).lower()
+        _is_rate_limit = "429" in _last_error or "rate" in _last_error or "provider returned error" in _last_error
+        if _is_rate_limit:
+            error_text = (
+                "All available free models are currently busy or rate-limited. "
+                "Please try again in a moment, or ask your administrator to configure a paid model."
+            )
+        else:
+            error_text = "Sorry, something went wrong while processing that request. Please try again."
 
         try:
             error_extras = {"is_error": 1}
